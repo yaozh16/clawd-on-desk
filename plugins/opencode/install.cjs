@@ -70,6 +70,7 @@ function getOpenCodeVersion() {
         encoding: "utf8",
         timeout: 5000,
         windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"], // Suppress stderr output
       });
       const match = out.match(/(\d+\.\d+\.\d+)/);
       if (match) {
