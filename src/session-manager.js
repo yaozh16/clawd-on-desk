@@ -19,7 +19,7 @@ class SessionManager {
     this.sessions = new Map(); // sessionId → Session
     this.ringOrder = []; // [sessionId1, sessionId2, ...] - first is foreground
     this.globalState = "idle"; // Used when no sessions
-    this.layout = new Layout(this);
+    this.layout = new Layout(this, config.layoutStrategy || "circular");
 
     // Configurable timeouts (can be updated at runtime)
     this.sessionStaleMs = config.sessionStaleMs || 600000;  // 10 min default

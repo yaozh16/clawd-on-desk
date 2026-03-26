@@ -86,6 +86,10 @@ const i18n = {
     sleepTimeoutDesc: "Enter deep sleep after",
     minutes: "minutes",
     seconds: "seconds",
+    layoutMode: "Layout Mode",
+    layoutCircular: "Circular",
+    layoutLinear: "Linear",
+    layoutGrid: "Grid",
     quit: "Quit",
   },
   zh: {
@@ -136,6 +140,10 @@ const i18n = {
     sleepTimeoutDesc: "进入深度睡眠",
     minutes: "分钟",
     seconds: "秒",
+    layoutMode: "布局模式",
+    layoutCircular: "环形",
+    layoutLinear: "线性",
+    layoutGrid: "网格",
     quit: "退出",
   },
 };
@@ -159,6 +167,7 @@ function loadPrefs() {
     if (typeof raw.workingStaleMs === "number") configWorkingStaleMs = raw.workingStaleMs;
     if (typeof raw.mouseSleepTimeout === "number") configMouseSleepTimeout = raw.mouseSleepTimeout;
     if (typeof raw.deepSleepTimeout === "number") configDeepSleepTimeout = raw.deepSleepTimeout;
+    if (typeof raw.layoutStrategy === "string") configLayoutStrategy = raw.layoutStrategy;
     return raw;
   } catch {
     return null;
@@ -177,6 +186,7 @@ function savePrefs() {
     workingStaleMs: configWorkingStaleMs,
     mouseSleepTimeout: configMouseSleepTimeout,
     deepSleepTimeout: configDeepSleepTimeout,
+    layoutStrategy: configLayoutStrategy,
   };
   try { fs.writeFileSync(PREFS_PATH, JSON.stringify(data)); } catch {}
 }
@@ -195,6 +205,7 @@ let configSessionStaleMs = SESSION_STALE_MS_DEFAULT;
 let configWorkingStaleMs = WORKING_STALE_MS_DEFAULT;
 let configMouseSleepTimeout = MOUSE_SLEEP_TIMEOUT_DEFAULT;
 let configDeepSleepTimeout = DEEP_SLEEP_TIMEOUT_DEFAULT;
+let configLayoutStrategy = "circular";
 let showTray = true;
 let showDock = true;
 let autoStartWithClaude = false;
@@ -1061,6 +1072,7 @@ function createWindow() {
     sessionStaleMs: configSessionStaleMs,
     workingStaleMs: configWorkingStaleMs,
     deepSleepTimeout: configDeepSleepTimeout,
+    layoutStrategy: configLayoutStrategy,
   });
   gateway = new Gateway(sessionManager, mainInterface);
   gateway.startHttpServer();
@@ -1569,6 +1581,15 @@ function buildContextMenu() {
           label: t("sleepTimeout"),
           submenu: buildTimeoutSubmenu("deepSleep", [1, 5, 10, 15, 30], configDeepSleepTimeout),
         },
+        { type: "separator" },
+        {
+          label: t("layoutMode"),
+          submenu: [
+            { label: t("layoutCircular"), type: "radio", checked: configLayoutStrategy === "circular", click: () => setLayoutStrategy("circular") },
+            { label: t("layoutLinear"), type: "radio", checked: configLayoutStrategy === "linear", click: () => setLayoutStrategy("linear") },
+            { label: t("layoutGrid"), type: "radio", checked: configLayoutStrategy === "grid", click: () => setLayoutStrategy("grid") },
+          ],
+        },
       ],
     },
     { type: "separator" },
@@ -1615,6 +1636,18 @@ function updateTimeoutConfig(type, ms) {
       configDeepSleepTimeout = ms;
       if (sessionManager) sessionManager.deepSleepTimeout = ms;
       break;
+  }
+  savePrefs();
+  buildContextMenu();
+}
+
+// Update layout strategy
+function setLayoutStrategy(strategy) {
+  configLayoutStrategy = strategy;
+  if (sessionManager && sessionManager.layout) {
+    sessionManager.layout.setStrategy(strategy);
+    // Re-layout current sessions
+    sessionManager.layout.updatePositions(sessionManager.ringOrder);
   }
   savePrefs();
   buildContextMenu();
