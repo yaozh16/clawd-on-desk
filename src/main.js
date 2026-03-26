@@ -11,6 +11,10 @@ const {
   SVG_IDLE_FOLLOW,
   STATE_SVGS,
   STATE_PRIORITY,
+  SESSION_STALE_MS_DEFAULT,
+  WORKING_STALE_MS_DEFAULT,
+  MOUSE_SLEEP_TIMEOUT_DEFAULT,
+  DEEP_SLEEP_TIMEOUT_DEFAULT,
 } = require("./constants");
 
 // ── Windows: AllowSetForegroundWindow via FFI ──
@@ -73,6 +77,15 @@ const i18n = {
     sessionJustNow: "just now",
     sessionMinAgo: "{n}m ago",
     sessionHrAgo: "{n}h ago",
+    settings: "Settings",
+    sessionTimeout: "Session Timeout",
+    sessionTimeoutDesc: "Remove inactive sessions after",
+    workingTimeout: "Working Timeout",
+    workingTimeoutDesc: "Reset working state after",
+    sleepTimeout: "Sleep Timeout",
+    sleepTimeoutDesc: "Enter deep sleep after",
+    minutes: "minutes",
+    seconds: "seconds",
     quit: "Quit",
   },
   zh: {
@@ -114,6 +127,15 @@ const i18n = {
     sessionJustNow: "刚刚",
     sessionMinAgo: "{n}分钟前",
     sessionHrAgo: "{n}小时前",
+    settings: "设置",
+    sessionTimeout: "会话超时",
+    sessionTimeoutDesc: "清理不活跃会话",
+    workingTimeout: "工作状态超时",
+    workingTimeoutDesc: "重置工作状态",
+    sleepTimeout: "睡眠超时",
+    sleepTimeoutDesc: "进入深度睡眠",
+    minutes: "分钟",
+    seconds: "秒",
     quit: "退出",
   },
 };
@@ -132,6 +154,11 @@ function loadPrefs() {
         raw[key] = 0;
       }
     }
+    // Load configurable settings
+    if (typeof raw.sessionStaleMs === "number") configSessionStaleMs = raw.sessionStaleMs;
+    if (typeof raw.workingStaleMs === "number") configWorkingStaleMs = raw.workingStaleMs;
+    if (typeof raw.mouseSleepTimeout === "number") configMouseSleepTimeout = raw.mouseSleepTimeout;
+    if (typeof raw.deepSleepTimeout === "number") configDeepSleepTimeout = raw.deepSleepTimeout;
     return raw;
   } catch {
     return null;
@@ -146,6 +173,10 @@ function savePrefs() {
     miniMode, preMiniX, preMiniY, lang,
     showTray, showDock,
     autoStartWithClaude,
+    sessionStaleMs: configSessionStaleMs,
+    workingStaleMs: configWorkingStaleMs,
+    mouseSleepTimeout: configMouseSleepTimeout,
+    deepSleepTimeout: configDeepSleepTimeout,
   };
   try { fs.writeFileSync(PREFS_PATH, JSON.stringify(data)); } catch {}
 }
@@ -158,6 +189,12 @@ let currentSize = "S";
 let contextMenu;
 let doNotDisturb = false;
 let isQuitting = false;
+
+// ── Configurable settings (loaded from prefs, with defaults) ──
+let configSessionStaleMs = SESSION_STALE_MS_DEFAULT;
+let configWorkingStaleMs = WORKING_STALE_MS_DEFAULT;
+let configMouseSleepTimeout = MOUSE_SLEEP_TIMEOUT_DEFAULT;
+let configDeepSleepTimeout = DEEP_SLEEP_TIMEOUT_DEFAULT;
 let showTray = true;
 let showDock = true;
 let autoStartWithClaude = false;
@@ -977,14 +1014,6 @@ function createWindow() {
     sessionManager?.bringToFront(sessionId);
   });
 
-  ipcMain.on("rotate-ring", (event, direction) => {
-    if (direction === "left") {
-      sessionManager?.rotateLeft();
-    } else {
-      sessionManager?.rotateRight();
-    }
-  });
-
   ipcMain.on("bubble-height", (event, height) => {
     const senderWin = BrowserWindow.fromWebContents(event.sender);
     const perm = pendingPermissions.find(p => p.bubble === senderWin);
@@ -1027,8 +1056,12 @@ function createWindow() {
 
   startMainTick();
 
-  // Initialize SessionManager and Gateway
-  sessionManager = new SessionManager(mainInterface);
+  // Initialize SessionManager and Gateway with config
+  sessionManager = new SessionManager(mainInterface, {
+    sessionStaleMs: configSessionStaleMs,
+    workingStaleMs: configWorkingStaleMs,
+    deepSleepTimeout: configDeepSleepTimeout,
+  });
   gateway = new Gateway(sessionManager, mainInterface);
   gateway.startHttpServer();
   sessionManager.startStaleCleanup();
@@ -1521,6 +1554,24 @@ function buildContextMenu() {
   }
   template.push(
     { type: "separator" },
+    {
+      label: t("settings"),
+      submenu: [
+        {
+          label: t("sessionTimeout"),
+          submenu: buildTimeoutSubmenu("sessionStale", [1, 5, 10, 15, 30], configSessionStaleMs),
+        },
+        {
+          label: t("workingTimeout"),
+          submenu: buildTimeoutSubmenu("workingStale", [1, 3, 5, 10], configWorkingStaleMs),
+        },
+        {
+          label: t("sleepTimeout"),
+          submenu: buildTimeoutSubmenu("deepSleep", [1, 5, 10, 15, 30], configDeepSleepTimeout),
+        },
+      ],
+    },
+    { type: "separator" },
     getUpdateMenuItem(),
     { type: "separator" },
     {
@@ -1534,6 +1585,39 @@ function buildContextMenu() {
     { label: t("quit"), click: () => requestAppQuit() },
   );
   contextMenu = Menu.buildFromTemplate(template);
+}
+
+// Helper to build timeout selection submenu
+function buildTimeoutSubmenu(type, minuteOptions, currentValue) {
+  return minuteOptions.map((mins) => {
+    const ms = mins * 60000;
+    return {
+      label: `${mins} ${t("minutes")}`,
+      type: "radio",
+      checked: currentValue === ms,
+      click: () => updateTimeoutConfig(type, ms),
+    };
+  });
+}
+
+// Update timeout configuration
+function updateTimeoutConfig(type, ms) {
+  switch (type) {
+    case "sessionStale":
+      configSessionStaleMs = ms;
+      if (sessionManager) sessionManager.sessionStaleMs = ms;
+      break;
+    case "workingStale":
+      configWorkingStaleMs = ms;
+      if (sessionManager) sessionManager.workingStaleMs = ms;
+      break;
+    case "deepSleep":
+      configDeepSleepTimeout = ms;
+      if (sessionManager) sessionManager.deepSleepTimeout = ms;
+      break;
+  }
+  savePrefs();
+  buildContextMenu();
 }
 
 function setLanguage(newLang) {

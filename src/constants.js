@@ -79,16 +79,24 @@ const SLEEP_SEQUENCE = new Set(["yawning", "dozing", "collapsing", "sleeping", "
 
 // ── Sleep sequence timings ──
 const MOUSE_IDLE_TIMEOUT = 20000;   // 20s → idle-look
-const MOUSE_SLEEP_TIMEOUT = 60000;  // 60s → yawning → dozing
-const DEEP_SLEEP_TIMEOUT = 600000;  // 10min → collapsing → sleeping
+const MOUSE_SLEEP_TIMEOUT_DEFAULT = 60000;  // 60s → yawning → dozing
+const DEEP_SLEEP_TIMEOUT_DEFAULT = 600000;  // 10min → collapsing → sleeping
 const YAWN_DURATION = 3000;
 const COLLAPSE_DURATION = 800;
 const WAKE_DURATION = 1500;
 const IDLE_LOOK_DURATION = 10000;
 
-// ── Session staleness thresholds ──
-const SESSION_STALE_MS = 600000;  // 10 min
-const WORKING_STALE_MS = 300000;  // 5 min
+// ── Session staleness thresholds (defaults, can be customized) ──
+const SESSION_STALE_MS_DEFAULT = 600000;  // 10 min
+const WORKING_STALE_MS_DEFAULT = 300000;  // 5 min
+
+// Expose configurable constants for prefs
+const CONFIGURABLE_DEFAULTS = {
+  sessionStaleMs: SESSION_STALE_MS_DEFAULT,
+  workingStaleMs: WORKING_STALE_MS_DEFAULT,
+  mouseSleepTimeout: MOUSE_SLEEP_TIMEOUT_DEFAULT,
+  deepSleepTimeout: DEEP_SLEEP_TIMEOUT_DEFAULT,
+};
 
 // ── Ring layout config ──
 const RING_CONFIG = {
@@ -108,13 +116,14 @@ module.exports = {
   STATE_PRIORITY,
   SLEEP_SEQUENCE,
   MOUSE_IDLE_TIMEOUT,
-  MOUSE_SLEEP_TIMEOUT,
-  DEEP_SLEEP_TIMEOUT,
+  MOUSE_SLEEP_TIMEOUT_DEFAULT,
+  DEEP_SLEEP_TIMEOUT_DEFAULT,
   YAWN_DURATION,
   COLLAPSE_DURATION,
   WAKE_DURATION,
   IDLE_LOOK_DURATION,
-  SESSION_STALE_MS,
-  WORKING_STALE_MS,
+  SESSION_STALE_MS_DEFAULT,
+  WORKING_STALE_MS_DEFAULT,
+  CONFIGURABLE_DEFAULTS,
   RING_CONFIG,
 };

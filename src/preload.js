@@ -22,5 +22,4 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onLayoutUpdate: (callback) => ipcRenderer.on("layout-update", (_, ringOrder, positions) => callback(ringOrder, positions)),
   onPetRemove: (callback) => ipcRenderer.on("pet-remove", (_, sessionId) => callback(sessionId)),
   bringToFront: (sessionId) => ipcRenderer.send("bring-to-front", sessionId),
-  rotateRing: (direction) => ipcRenderer.send("rotate-ring", direction),
 });

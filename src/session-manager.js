@@ -8,21 +8,23 @@ const {
   STATE_PRIORITY,
   SLEEP_SEQUENCE,
   SVG_IDLE_FOLLOW,
-  SESSION_STALE_MS,
-  WORKING_STALE_MS,
   YAWN_DURATION,
   COLLAPSE_DURATION,
   WAKE_DURATION,
-  DEEP_SLEEP_TIMEOUT,
 } = require("./constants");
 
 class SessionManager {
-  constructor(mainProcess) {
+  constructor(mainProcess, config = {}) {
     this.main = mainProcess; // Reference to main process for sendToRenderer, etc.
     this.sessions = new Map(); // sessionId → Session
     this.ringOrder = []; // [sessionId1, sessionId2, ...] - first is foreground
     this.globalState = "idle"; // Used when no sessions
     this.layout = new Layout(this);
+
+    // Configurable timeouts (can be updated at runtime)
+    this.sessionStaleMs = config.sessionStaleMs || 600000;  // 10 min default
+    this.workingStaleMs = config.workingStaleMs || 300000;  // 5 min default
+    this.deepSleepTimeout = config.deepSleepTimeout || 600000;  // 10 min default
 
     // Global sleep sequence timers
     this.globalSleepTimer = null;
@@ -207,7 +209,7 @@ class SessionManager {
       if (this.sessions.size === 0) {
         this.transitionToCollapsing();
       }
-    }, DEEP_SLEEP_TIMEOUT);
+    }, this.deepSleepTimeout);
   }
 
   transitionToCollapsing() {
@@ -312,8 +314,8 @@ class SessionManager {
         }
       }
 
-      if (age > SESSION_STALE_MS) {
-        // Very stale (10 min): check source PID
+      if (age > this.sessionStaleMs) {
+        // Very stale: check source PID
         if (s.pidReachable && s.sourcePid) {
           try {
             process.kill(s.sourcePid, 0);
@@ -334,7 +336,7 @@ class SessionManager {
           changed = true;
         }
         // If pidReachable but no sourcePid, keep session (may have only agentPid)
-      } else if (age > WORKING_STALE_MS) {
+      } else if (age > this.workingStaleMs) {
         // Moderately stale (5 min): check if terminal was closed
         if (s.pidReachable && s.sourcePid) {
           try {
@@ -400,7 +402,10 @@ class SessionManager {
       return {
         label: `${emoji} ${name}  ${stateText}  ${elapsed}`,
         enabled: hasPid,
-        click: hasPid ? () => this.main.focusTerminal(e.sourcePid, e.cwd, e.editor, e.pidChain) : undefined,
+        click: hasPid ? () => {
+          this.bringToFront(e.id);
+          this.main.focusTerminal(e.sourcePid, e.cwd, e.editor, e.pidChain);
+        } : undefined,
       };
     });
   }

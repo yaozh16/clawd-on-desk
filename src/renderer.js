@@ -140,18 +140,6 @@ function handleClick(clientX, clientY, target) {
   }
   if (isReacting || isDragReacting) return;
 
-  // Check if clicked on nav buttons first
-  const leftBtn = document.getElementById("nav-left");
-  const rightBtn = document.getElementById("nav-right");
-  if (leftBtn && leftBtn.contains(target)) {
-    window.electronAPI.rotateRing("right"); // right rotation brings left pet to front
-    return;
-  }
-  if (rightBtn && rightBtn.contains(target)) {
-    window.electronAPI.rotateRing("left"); // left rotation brings right pet to front
-    return;
-  }
-
   // Check if clicked on a background pet
   const clickedSessionId = getPetAtPosition(clientX, clientY);
   if (clickedSessionId && clickedSessionId !== foregroundSessionId) {
@@ -429,7 +417,6 @@ function updatePetPositions(newRingOrder, positions) {
   });
 
   updatePetVisibility();
-  updateNavButtons();
 }
 
 function updatePetVisibility() {
@@ -440,73 +427,6 @@ function updatePetVisibility() {
     } else {
       pet.wrapper.style.display = "";
     }
-  }
-}
-
-function updateNavButtons() {
-  let leftBtn = document.getElementById("nav-left");
-  let rightBtn = document.getElementById("nav-right");
-
-  // Hide buttons if only one pet or no pets
-  if (ringOrder.length <= 1) {
-    if (leftBtn) leftBtn.style.display = "none";
-    if (rightBtn) rightBtn.style.display = "none";
-    return;
-  }
-
-  // Create nav buttons if not exist
-  if (!leftBtn) {
-    leftBtn = document.createElement("div");
-    leftBtn.id = "nav-left";
-    leftBtn.className = "nav-btn nav-left";
-    leftBtn.innerHTML = "◀";
-    leftBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      window.electronAPI.rotateRing("right"); // right rotation brings left pet to front
-    });
-    container.appendChild(leftBtn);
-  }
-  if (!rightBtn) {
-    rightBtn = document.createElement("div");
-    rightBtn.id = "nav-right";
-    rightBtn.className = "nav-btn nav-right";
-    rightBtn.innerHTML = "▶";
-    rightBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      window.electronAPI.rotateRing("left"); // left rotation brings right pet to front
-    });
-    container.appendChild(rightBtn);
-  }
-
-  leftBtn.style.display = "";
-  rightBtn.style.display = "";
-
-  // Position buttons relative to foreground pet
-  const fgPet = pets.get(foregroundSessionId);
-  if (fgPet) {
-    const wrapper = fgPet.wrapper;
-    const element = fgPet.element;
-
-    // Get current transform values
-    const petTransform = wrapper.style.transform || "";
-    const petXMatch = petTransform.match(/translateX\(([-\d.]+)px\)/);
-    const petX = petXMatch ? parseFloat(petXMatch[1]) : 0;
-
-    const svgTransform = element.style.transform || "";
-    const scaleMatch = svgTransform.match(/scale\(([-\d.]+)\)/);
-    const petScale = scaleMatch ? parseFloat(scaleMatch[1]) : 1;
-
-    // Calculate button offset based on pet scale
-    const btnOffset = 50 * petScale;
-
-    // Position buttons at left and right of foreground pet center
-    const centerX = 50; // percentage
-
-    leftBtn.style.left = `calc(${centerX}% + ${petX}px - ${btnOffset}px)`;
-    leftBtn.style.transform = "translate(-100%, -50%)";
-
-    rightBtn.style.left = `calc(${centerX}% + ${petX}px + ${btnOffset}px)`;
-    rightBtn.style.transform = "translate(0, -50%)";
   }
 }
 
