@@ -447,6 +447,14 @@ function showPermissionBubble(permEntry) {
   const bh = estimateBubbleHeight(sugCount);
   const pos = { x: 0, y: 0, width: 340, height: bh };
 
+  // Show notification state on foreground pet
+  const fgSession = sessionManager?.getForegroundSession();
+  if (fgSession) {
+    permEntry.previousState = fgSession.state;
+    permEntry.previousSvg = fgSession.svg;
+    fgSession.setState("notification");
+  }
+
   const bub = new BrowserWindow({
     width: pos.width,
     height: pos.height,
@@ -516,6 +524,14 @@ function resolvePermissionEntry(permEntry, behavior, message) {
   }
 
   repositionBubbles();
+
+  // Restore foreground pet state
+  if (permEntry.previousState) {
+    const fgSession = sessionManager?.getForegroundSession();
+    if (fgSession) {
+      fgSession.setState(permEntry.previousState, permEntry.previousSvg);
+    }
+  }
 
   if (res.writableEnded || res.destroyed) return;
 

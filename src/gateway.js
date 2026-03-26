@@ -106,16 +106,6 @@ class Gateway {
           return;
         }
 
-        // Handle PermissionRequest separately
-        if (event === "PermissionRequest") {
-          // Just show notification on foreground pet, don't mutate session
-          const fgId = this.manager.getForegroundSessionId() || sessionId;
-          this.manager.sendToRenderer("pet-state-change", fgId, "notification", "clawd-notification.svg");
-          res.writeHead(200);
-          res.end("ok");
-          return;
-        }
-
         // Handle "user answered in terminal"
         if (event === "PostToolUse" || event === "PostToolUseFailure" || event === "Stop") {
           for (const perm of [...this.pendingPermissions]) {
