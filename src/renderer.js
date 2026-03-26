@@ -329,15 +329,22 @@ function swapPetSvg(pet, svgFile) {
     pet.pendingNext = null;
   }
 
+  // Preserve current scale and opacity from the existing element
+  const currentScale = pet.element.style.transform || "";
+  const currentOpacity = pet.element.style.opacity || "1";
+
   const next = document.createElement("object");
   next.type = "image/svg+xml";
   next.className = "pet-svg";
   next.style.opacity = "0";
+  // Apply current scale to the new element immediately
+  next.style.transform = currentScale;
 
   const swap = () => {
     if (pet.pendingNext !== next) return;
     next.style.transition = "none";
-    next.style.opacity = "1";
+    // Restore the layout-computed opacity after swap
+    next.style.opacity = currentOpacity;
     pet.element.remove();
     pet.wrapper.appendChild(next);
     pet.element = next;
