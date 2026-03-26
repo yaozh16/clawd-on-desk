@@ -1,17 +1,61 @@
-// --- Pointer-based drag + click detection (with Pointer Capture for safety) ---
+// --- Multi-pet renderer ---
 const container = document.getElementById("pet-container");
+
+// Pets map: sessionId → { element, state, svg }
+const pets = new Map();
+
+// Current ring order and foreground session
+let ringOrder = [];
+let foregroundSessionId = null;
+
+// --- Pointer-based drag + click detection ---
 let isDragging = false;
-let didDrag = false; // true if pointer moved > threshold during this press
+let didDrag = false;
 let lastScreenX, lastScreenY;
 let mouseDownX, mouseDownY;
 let pendingDx = 0, pendingDy = 0;
 let dragRAF = null;
-const DRAG_THRESHOLD = 3; // px — less than this = click, more = drag
+const DRAG_THRESHOLD = 3;
 
+// --- Do Not Disturb ---
+let dndEnabled = false;
+window.electronAPI.onDndChange((enabled) => { dndEnabled = enabled; });
+
+// --- Mini Mode ---
+let miniMode = false;
+window.electronAPI.onMiniModeChange((enabled) => {
+  miniMode = enabled;
+  container.style.cursor = enabled ? "default" : "";
+  updatePetVisibility();
+});
+
+// --- Click tracking for reactions ---
+const CLICK_WINDOW_MS = 400;
+const REACT_LEFT_SVG = "clawd-react-left.svg";
+const REACT_RIGHT_SVG = "clawd-react-right.svg";
+const REACT_DOUBLE_SVG = "clawd-react-double.svg";
+const REACT_DRAG_SVG = "clawd-react-drag.svg";
+const REACT_SINGLE_DURATION = 2500;
+const REACT_DOUBLE_DURATION = 3500;
+
+let clickCount = 0;
+let clickTimer = null;
+let firstClickDir = null;
+let isReacting = false;
+let isDragReacting = false;
+let reactTimer = null;
+
+const SVG_IDLE_FOLLOW = "clawd-idle-follow.svg";
+
+function shouldTrackEyes(state, svg) {
+  return (state === "idle" && svg === SVG_IDLE_FOLLOW) || state === "mini-idle";
+}
+
+// --- Drag handling ---
 container.addEventListener("pointerdown", (e) => {
   if (e.button === 0) {
     if (miniMode) { didDrag = false; return; }
-    container.setPointerCapture(e.pointerId);  // Guarantees pointerup even if pointer leaves window
+    container.setPointerCapture(e.pointerId);
     isDragging = true;
     didDrag = false;
     lastScreenX = e.screenX;
@@ -32,7 +76,6 @@ document.addEventListener("pointermove", (e) => {
     lastScreenX = e.screenX;
     lastScreenY = e.screenY;
 
-    // Mark as drag if moved beyond threshold
     if (!didDrag) {
       const totalDx = e.clientX - mouseDownX;
       const totalDy = e.clientY - mouseDownY;
@@ -58,13 +101,11 @@ function stopDrag() {
   isDragging = false;
   window.electronAPI.dragLock(false);
   container.classList.remove("dragging");
-  // Flush pending delta before releasing
   if (pendingDx !== 0 || pendingDy !== 0) {
     if (dragRAF) { clearTimeout(dragRAF); dragRAF = null; }
     window.electronAPI.moveWindowBy(pendingDx, pendingDy);
     pendingDx = 0; pendingDy = 0;
   }
-  // Only trigger edge snap check on actual drags (not clicks)
   if (didDrag) {
     window.electronAPI.dragEnd();
   }
@@ -79,101 +120,79 @@ document.addEventListener("pointerup", (e) => {
       if (e.ctrlKey || e.metaKey) {
         window.electronAPI.showSessionMenu();
       } else {
-        handleClick(e.clientX);
+        handleClick(e.clientX, e.clientY, e.target);
       }
     }
   }
 });
 
-// Pointer Capture can end via OS interruption (Alt+Tab, system dialog, etc.)
 container.addEventListener("pointercancel", stopDrag);
 container.addEventListener("lostpointercapture", () => {
   if (isDragging) stopDrag();
 });
-
 window.addEventListener("blur", stopDrag);
 
-// --- Do Not Disturb (synced from main process) ---
-let dndEnabled = false;
-window.electronAPI.onDndChange((enabled) => { dndEnabled = enabled; });
-
-// --- Mini Mode (synced from main process) ---
-let miniMode = false;
-window.electronAPI.onMiniModeChange((enabled) => {
-  miniMode = enabled;
-  container.style.cursor = enabled ? "default" : "";
-});
-
-// --- Click reaction (2-click = poke, 4-click = flail) ---
-const CLICK_WINDOW_MS = 400;  // max gap between consecutive clicks
-const REACT_LEFT_SVG = "clawd-react-left.svg";
-const REACT_RIGHT_SVG = "clawd-react-right.svg";
-const REACT_DOUBLE_SVG = "clawd-react-double.svg";
-const REACT_DRAG_SVG = "clawd-react-drag.svg";
-const REACT_SINGLE_DURATION = 2500;
-const REACT_DOUBLE_DURATION = 3500;
-
-let clickCount = 0;
-let clickTimer = null;
-let firstClickDir = null;     // direction from the first click in a sequence
-let isReacting = false;       // click reaction animation is playing
-let isDragReacting = false;   // drag reaction is active
-let reactTimer = null;        // auto-return timer
-let currentIdleSvg = null;    // tracks which SVG is currently showing
-
-function getObjectSvgName(objectEl) {
-  if (!objectEl) return null;
-  const data = objectEl.getAttribute("data") || objectEl.data || "";
-  if (!data) return null;
-  const clean = data.split(/[?#]/)[0];
-  const parts = clean.split("/");
-  return parts[parts.length - 1] || null;
-}
-
-const SVG_IDLE_FOLLOW = "clawd-idle-follow.svg";
-
-function shouldTrackEyes(state, svg) {
-  return (state === "idle" && svg === SVG_IDLE_FOLLOW) || state === "mini-idle";
-}
-
-function handleClick(clientX) {
+// --- Click handling ---
+function handleClick(clientX, clientY, target) {
   if (miniMode) {
     window.electronAPI.exitMiniMode();
     return;
   }
   if (isReacting || isDragReacting) return;
 
-  // Non-idle states: single click → focus terminal directly, no reaction animation
-  if (currentIdleSvg !== "clawd-idle-follow.svg" && currentIdleSvg !== "clawd-idle-living.svg") {
+  // Check if clicked on nav buttons first
+  const leftBtn = document.getElementById("nav-left");
+  const rightBtn = document.getElementById("nav-right");
+  if (leftBtn && leftBtn.contains(target)) {
+    window.electronAPI.rotateRing("right"); // right rotation brings left pet to front
+    return;
+  }
+  if (rightBtn && rightBtn.contains(target)) {
+    window.electronAPI.rotateRing("left"); // left rotation brings right pet to front
+    return;
+  }
+
+  // Check if clicked on a background pet
+  const clickedSessionId = getPetAtPosition(clientX, clientY);
+  if (clickedSessionId && clickedSessionId !== foregroundSessionId) {
+    window.electronAPI.bringToFront(clickedSessionId);
+    return;
+  }
+
+  // Get foreground pet state
+  const foregroundPet = pets.get(foregroundSessionId);
+  if (!foregroundPet) return;
+
+  const { state, svg } = foregroundPet;
+
+  // Non-idle states: focus terminal directly
+  if (svg !== SVG_IDLE_FOLLOW && svg !== "clawd-idle-living.svg") {
     window.electronAPI.focusTerminal();
     return;
   }
 
-  // Idle states: immediate focus on first click, still track for reactions
+  // Idle states: track clicks for reactions
   clickCount++;
   if (clickCount === 1) {
     firstClickDir = clientX < container.offsetWidth / 2 ? "left" : "right";
-    window.electronAPI.focusTerminal();  // Instant — no 400ms wait
+    window.electronAPI.focusTerminal();
   }
 
   if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
 
   if (clickCount >= 4) {
-    // 4+ clicks → flail reaction (东张西望)
     clickCount = 0;
     firstClickDir = null;
-    playReaction(REACT_DOUBLE_SVG, REACT_DOUBLE_DURATION);
+    playReaction(foregroundSessionId, REACT_DOUBLE_SVG, REACT_DOUBLE_DURATION);
   } else if (clickCount >= 2) {
-    // 2-3 clicks → wait briefly for more, then poke reaction
     clickTimer = setTimeout(() => {
       clickTimer = null;
       const svg = firstClickDir === "left" ? REACT_LEFT_SVG : REACT_RIGHT_SVG;
       clickCount = 0;
       firstClickDir = null;
-      playReaction(svg, REACT_SINGLE_DURATION);
+      playReaction(foregroundSessionId, svg, REACT_SINGLE_DURATION);
     }, CLICK_WINDOW_MS);
   } else {
-    // 1 click → reset counter after timeout
     clickTimer = setTimeout(() => {
       clickTimer = null;
       clickCount = 0;
@@ -182,53 +201,61 @@ function handleClick(clientX) {
   }
 }
 
-function playReaction(svgFile, durationMs) {
-  isReacting = true;
-  detachEyeTracking();
-  window.electronAPI.pauseCursorPolling();
+function getPetAtPosition(clientX, clientY) {
+  // Get container center
+  const containerRect = container.getBoundingClientRect();
+  const centerX = containerRect.left + containerRect.width / 2;
+  const centerY = containerRect.top + containerRect.height / 2;
 
-  // Reuse existing swap pattern
-  if (pendingNext) {
-    pendingNext.remove();
-    pendingNext = null;
+  // Calculate click offset from center
+  const clickOffsetX = clientX - centerX;
+
+  // Find the background pet whose position is closest to the click
+  let closestSessionId = null;
+  let closestDistance = Infinity;
+
+  for (const [sessionId, pet] of pets) {
+    if (sessionId === foregroundSessionId) continue;
+    const el = pet.wrapper;
+    if (!el) continue;
+
+    // Get the pet's translateX from transform
+    const transform = el.style.transform || "";
+    const match = transform.match(/translateX\(([-\d.]+)px\)/);
+    const petOffsetX = match ? parseFloat(match[1]) : 0;
+
+    // Calculate distance from click to pet center
+    const distance = Math.abs(clickOffsetX - petOffsetX);
+
+    // Consider this pet if click is within its visible area (roughly 60px radius)
+    if (distance < 60 && distance < closestDistance) {
+      closestDistance = distance;
+      closestSessionId = sessionId;
+    }
   }
 
-  const next = document.createElement("object");
-  next.type = "image/svg+xml";
-  next.id = "clawd";
-  next.style.opacity = "0";
+  if (closestSessionId) {
+    console.log("[Renderer] Pet hit:", closestSessionId, "distance:", closestDistance, "clickOffset:", clickOffsetX);
+  }
 
-  const swap = () => {
-    if (pendingNext !== next) return;
-    next.style.transition = "none";
-    next.style.opacity = "1";
-    for (const child of [...container.querySelectorAll("object")]) {
-      if (child !== next) child.remove();
-    }
-    pendingNext = null;
-    clawdEl = next;
-    currentDisplayedSvg = svgFile;
-  };
-
-  next.addEventListener("load", swap, { once: true });
-  next.data = `../assets/svg/${svgFile}`;
-  container.appendChild(next);
-  pendingNext = next;
-  setTimeout(() => {
-    if (pendingNext !== next) return;
-    // If SVG failed to load, abandon swap and keep current display
-    try { if (!next.contentDocument) { next.remove(); pendingNext = null; return; } } catch {}
-    swap();
-  }, 3000);
-
-  reactTimer = setTimeout(() => endReaction(), durationMs);
+  return closestSessionId;
 }
 
-function endReaction() {
-  if (!isReacting) return;
-  isReacting = false;
-  reactTimer = null;
-  window.electronAPI.resumeFromReaction();
+function playReaction(sessionId, svgFile, durationMs) {
+  const pet = pets.get(sessionId);
+  if (!pet) return;
+
+  isReacting = true;
+  detachEyeTracking(sessionId);
+  window.electronAPI.pauseCursorPolling();
+
+  swapPetSvg(pet, svgFile);
+
+  reactTimer = setTimeout(() => {
+    isReacting = false;
+    reactTimer = null;
+    window.electronAPI.resumeFromReaction();
+  }, durationMs);
 }
 
 function cancelReaction() {
@@ -242,49 +269,22 @@ function cancelReaction() {
   }
 }
 
-// --- Drag reaction (loops while dragging, idle-follow only) ---
-function swapToSvg(svgFile) {
-  if (pendingNext) { pendingNext.remove(); pendingNext = null; }
-  const next = document.createElement("object");
-  next.type = "image/svg+xml";
-  next.id = "clawd";
-  next.style.opacity = "0";
-  const swap = () => {
-    if (pendingNext !== next) return;
-    next.style.transition = "none";
-    next.style.opacity = "1";
-    for (const child of [...container.querySelectorAll("object")]) {
-      if (child !== next) child.remove();
-    }
-    pendingNext = null;
-    clawdEl = next;
-    currentDisplayedSvg = svgFile;
-  };
-  next.addEventListener("load", swap, { once: true });
-  next.data = `../assets/svg/${svgFile}`;
-  container.appendChild(next);
-  pendingNext = next;
-  setTimeout(() => {
-    if (pendingNext !== next) return;
-    try { if (!next.contentDocument) { next.remove(); pendingNext = null; return; } } catch {}
-    swap();
-  }, 3000);
-}
-
+// --- Drag reaction ---
 function startDragReaction() {
   if (isDragReacting) return;
-  if (dndEnabled) return;  // DND: just move the window, no reaction animation
+  if (dndEnabled) return;
 
-  // Drag interrupts click reaction if active
   if (isReacting) {
     if (reactTimer) { clearTimeout(reactTimer); reactTimer = null; }
     isReacting = false;
   }
 
   isDragReacting = true;
-  detachEyeTracking();
+  detachEyeTracking(foregroundSessionId);
   window.electronAPI.pauseCursorPolling();
-  swapToSvg(REACT_DRAG_SVG);
+
+  const pet = pets.get(foregroundSessionId);
+  if (pet) swapPetSvg(pet, REACT_DRAG_SVG);
 }
 
 function endDragReaction() {
@@ -293,160 +293,363 @@ function endDragReaction() {
   window.electronAPI.resumeFromReaction();
 }
 
-// --- State change → switch SVG animation (preload + instant swap) ---
-let clawdEl = document.getElementById("clawd");
-let pendingNext = null;
-let currentDisplayedSvg = getObjectSvgName(clawdEl);
-currentIdleSvg = currentDisplayedSvg;
+// --- Pet management ---
 
-window.electronAPI.onStateChange((state, svg) => {
-  // Main process state change → cancel any active click reaction
-  cancelReaction();
+function createPet(sessionId, svg) {
+  if (pets.has(sessionId)) return pets.get(sessionId);
 
-  if (pendingNext) {
-    pendingNext.remove();
-    pendingNext = null;
+  // Create wrapper for positioning
+  const wrapper = document.createElement("div");
+  wrapper.className = "pet-wrapper";
+  wrapper.dataset.sessionId = sessionId;
+
+  // Create SVG object
+  const element = document.createElement("object");
+  element.type = "image/svg+xml";
+  element.className = "pet-svg";
+  element.data = `../assets/svg/${svg}`;
+
+  wrapper.appendChild(element);
+  container.appendChild(wrapper);
+
+  const pet = {
+    wrapper,
+    element,
+    state: "idle",
+    svg,
+    pendingNext: null,
+  };
+
+  pets.set(sessionId, pet);
+  return pet;
+}
+
+function removePet(sessionId) {
+  const pet = pets.get(sessionId);
+  if (!pet) return;
+
+  if (pet.pendingNext) pet.pendingNext.remove();
+  pet.wrapper.remove();
+  pets.delete(sessionId);
+
+  detachEyeTracking(sessionId);
+}
+
+function swapPetSvg(pet, svgFile) {
+  if (pet.pendingNext) {
+    pet.pendingNext.remove();
+    pet.pendingNext = null;
   }
-  if (clawdEl && clawdEl.isConnected && currentDisplayedSvg === svg) {
-    if (shouldTrackEyes(state, svg) && !eyeTarget) {
-      attachEyeTracking(clawdEl);
-    } else if (!shouldTrackEyes(state, svg)) {
-      detachEyeTracking();
-    }
-    currentIdleSvg = svg;
-    return;
-  }
-  detachEyeTracking();
 
   const next = document.createElement("object");
   next.type = "image/svg+xml";
-  next.id = "clawd";
+  next.className = "pet-svg";
   next.style.opacity = "0";
 
   const swap = () => {
-    if (pendingNext !== next) return;
+    if (pet.pendingNext !== next) return;
     next.style.transition = "none";
     next.style.opacity = "1";
-    for (const child of [...container.querySelectorAll("object")]) {
-      if (child !== next) child.remove();
-    }
-    pendingNext = null;
-    clawdEl = next;
-    currentDisplayedSvg = svg;
-
-    if (shouldTrackEyes(state, svg)) {
-      attachEyeTracking(next);
-    }
-
-    // Track current SVG for click reaction gating
-    currentIdleSvg = svg;
+    pet.element.remove();
+    pet.wrapper.appendChild(next);
+    pet.element = next;
+    pet.svg = svgFile;
+    pet.pendingNext = null;
   };
 
   next.addEventListener("load", swap, { once: true });
-  next.data = `../assets/svg/${svg}`;
-  container.appendChild(next);
-  pendingNext = next;
+  next.data = `../assets/svg/${svgFile}`;
+  pet.wrapper.appendChild(next);
+  pet.pendingNext = next;
+
   setTimeout(() => {
-    if (pendingNext !== next) return;
-    try { if (!next.contentDocument) { next.remove(); pendingNext = null; return; } } catch {}
+    if (pet.pendingNext !== next) return;
+    try { if (!next.contentDocument) { next.remove(); pet.pendingNext = null; return; } } catch {}
     swap();
   }, 3000);
-});
+}
 
-// --- Eye tracking (idle state only) ---
-let eyeTarget = null;
-let bodyTarget = null;
-let shadowTarget = null;
-let lastEyeDx = 0;
-let lastEyeDy = 0;
-let eyeAttachToken = 0;
+function updatePetSvg(sessionId, svg) {
+  const pet = pets.get(sessionId);
+  if (!pet) return;
+  if (pet.svg === svg) return;
 
-function applyEyeMove(dx, dy) {
-  if (eyeTarget) {
-    eyeTarget.style.transform = `translate(${dx}px, ${dy}px)`;
+  swapPetSvg(pet, svg);
+}
+
+function updatePetPositions(newRingOrder, positions) {
+  console.log("[Renderer] updatePetPositions:", { ringOrder: newRingOrder, positionsCount: positions?.length });
+  ringOrder = newRingOrder;
+  foregroundSessionId = ringOrder[0] || null;
+
+  // Remove pets no longer in ring (including "default" when real sessions exist)
+  for (const [sessionId] of pets) {
+    if (!ringOrder.includes(sessionId)) {
+      console.log("[Renderer] Removing pet:", sessionId);
+      removePet(sessionId);
+    }
   }
-  if (bodyTarget || shadowTarget) {
-    const bdx = Math.round(dx * 0.33 * 2) / 2;
-    const bdy = Math.round(dy * 0.33 * 2) / 2;
-    if (bodyTarget) bodyTarget.style.transform = `translate(${bdx}px, ${bdy}px)`;
-    if (shadowTarget) {
-      // Shadow stretches toward lean direction (feet stay anchored)
-      const absDx = Math.abs(bdx);
-      const scaleX = 1 + absDx * 0.15;
-      const shiftX = Math.round(bdx * 0.3 * 2) / 2;
-      shadowTarget.style.transform = `translate(${shiftX}px, 0) scaleX(${scaleX})`;
+
+  // If we have real sessions but still have "default" pet, remove it
+  if (ringOrder.length > 0 && !ringOrder.includes("default") && pets.has("default")) {
+    removePet("default");
+  }
+
+  ringOrder.forEach((sessionId, i) => {
+    const pos = positions[i];
+    if (!pos) {
+      console.warn("[Renderer] No position for index", i, "sessionId", sessionId);
+      return;
+    }
+
+    // Create pet if it doesn't exist yet
+    let pet = pets.get(sessionId);
+    if (!pet) {
+      console.log("[Renderer] Creating pet for session:", sessionId);
+      pet = createPet(sessionId, SVG_IDLE_FOLLOW);
+    }
+
+    console.log("[Renderer] Positioning pet:", sessionId, "index:", i, "pos:", pos);
+
+    // Apply transforms directly for smooth animation
+    pet.wrapper.style.transform = `translateX(${pos.x}px)`;
+    pet.wrapper.style.zIndex = pos.zIndex;
+    pet.wrapper.classList.toggle("is-foreground", pos.isForeground);
+
+    // Apply scale and opacity to the SVG element
+    pet.element.style.transform = `scale(${pos.scale})`;
+    pet.element.style.opacity = pos.opacity;
+
+    // Eye tracking for foreground idle pet
+    if (pos.isForeground && pet.svg === SVG_IDLE_FOLLOW) {
+      attachEyeTracking(sessionId, pet.element);
+    } else {
+      detachEyeTracking(sessionId);
+    }
+  });
+
+  updatePetVisibility();
+  updateNavButtons();
+}
+
+function updatePetVisibility() {
+  // In mini mode, hide all but foreground
+  for (const [sessionId, pet] of pets) {
+    if (miniMode) {
+      pet.wrapper.style.display = sessionId === foregroundSessionId ? "" : "none";
+    } else {
+      pet.wrapper.style.display = "";
     }
   }
 }
 
-function attachEyeTracking(objectEl) {
-  const token = ++eyeAttachToken;
-  eyeTarget = null;
-  bodyTarget = null;
-  shadowTarget = null;
+function updateNavButtons() {
+  let leftBtn = document.getElementById("nav-left");
+  let rightBtn = document.getElementById("nav-right");
+
+  // Hide buttons if only one pet or no pets
+  if (ringOrder.length <= 1) {
+    if (leftBtn) leftBtn.style.display = "none";
+    if (rightBtn) rightBtn.style.display = "none";
+    return;
+  }
+
+  // Create nav buttons if not exist
+  if (!leftBtn) {
+    leftBtn = document.createElement("div");
+    leftBtn.id = "nav-left";
+    leftBtn.className = "nav-btn nav-left";
+    leftBtn.innerHTML = "◀";
+    leftBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      window.electronAPI.rotateRing("right"); // right rotation brings left pet to front
+    });
+    container.appendChild(leftBtn);
+  }
+  if (!rightBtn) {
+    rightBtn = document.createElement("div");
+    rightBtn.id = "nav-right";
+    rightBtn.className = "nav-btn nav-right";
+    rightBtn.innerHTML = "▶";
+    rightBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      window.electronAPI.rotateRing("left"); // left rotation brings right pet to front
+    });
+    container.appendChild(rightBtn);
+  }
+
+  leftBtn.style.display = "";
+  rightBtn.style.display = "";
+
+  // Position buttons relative to foreground pet
+  const fgPet = pets.get(foregroundSessionId);
+  if (fgPet) {
+    const wrapper = fgPet.wrapper;
+    const element = fgPet.element;
+
+    // Get current transform values
+    const petTransform = wrapper.style.transform || "";
+    const petXMatch = petTransform.match(/translateX\(([-\d.]+)px\)/);
+    const petX = petXMatch ? parseFloat(petXMatch[1]) : 0;
+
+    const svgTransform = element.style.transform || "";
+    const scaleMatch = svgTransform.match(/scale\(([-\d.]+)\)/);
+    const petScale = scaleMatch ? parseFloat(scaleMatch[1]) : 1;
+
+    // Calculate button offset based on pet scale
+    const btnOffset = 50 * petScale;
+
+    // Position buttons at left and right of foreground pet center
+    const centerX = 50; // percentage
+
+    leftBtn.style.left = `calc(${centerX}% + ${petX}px - ${btnOffset}px)`;
+    leftBtn.style.transform = "translate(-100%, -50%)";
+
+    rightBtn.style.left = `calc(${centerX}% + ${petX}px + ${btnOffset}px)`;
+    rightBtn.style.transform = "translate(0, -50%)";
+  }
+}
+
+// --- Eye tracking ---
+const eyeTargets = new Map();
+let lastEyeDx = 0;
+let lastEyeDy = 0;
+
+function attachEyeTracking(sessionId, objectEl) {
+  detachEyeTracking(sessionId);
 
   const tryAttach = (attempt) => {
-    if (token !== eyeAttachToken) return;
     if (!objectEl || !objectEl.isConnected) return;
 
     try {
       const svgDoc = objectEl.contentDocument;
       const eyes = svgDoc && svgDoc.getElementById("eyes-js");
       if (eyes) {
-        eyeTarget = eyes;
-        bodyTarget = svgDoc.getElementById("body-js");
-        shadowTarget = svgDoc.getElementById("shadow-js");
-        applyEyeMove(lastEyeDx, lastEyeDy);
+        eyeTargets.set(sessionId, {
+          eye: eyes,
+          body: svgDoc.getElementById("body-js"),
+          shadow: svgDoc.getElementById("shadow-js"),
+        });
+        applyEyeMove(sessionId, lastEyeDx, lastEyeDy);
         return;
       }
     } catch (e) {
-      console.warn("Cannot access SVG contentDocument for eye tracking:", e.message);
       return;
     }
 
-    if (attempt >= 60) {
-      console.warn("Timed out waiting for SVG eye targets");
-      return;
+    if (attempt < 60) {
+      setTimeout(() => tryAttach(attempt + 1), 16);
     }
-    // setTimeout fallback — rAF may be throttled in unfocused windows
-    setTimeout(() => tryAttach(attempt + 1), 16);
   };
 
   tryAttach(0);
 }
 
-function detachEyeTracking() {
-  eyeAttachToken++;
-  eyeTarget = null;
-  bodyTarget = null;
-  shadowTarget = null;
+function detachEyeTracking(sessionId) {
+  if (sessionId) {
+    eyeTargets.delete(sessionId);
+  } else {
+    eyeTargets.clear();
+  }
 }
 
+function applyEyeMove(sessionId, dx, dy) {
+  const targets = eyeTargets.get(sessionId);
+  if (!targets) return;
+
+  if (targets.eye) {
+    targets.eye.style.transform = `translate(${dx}px, ${dy}px)`;
+  }
+  if (targets.body || targets.shadow) {
+    const bdx = Math.round(dx * 0.33 * 2) / 2;
+    const bdy = Math.round(dy * 0.33 * 2) / 2;
+    if (targets.body) targets.body.style.transform = `translate(${bdx}px, ${bdy}px)`;
+    if (targets.shadow) {
+      const absDx = Math.abs(bdx);
+      const scaleX = 1 + absDx * 0.15;
+      const shiftX = Math.round(bdx * 0.3 * 2) / 2;
+      targets.shadow.style.transform = `translate(${shiftX}px, 0) scaleX(${scaleX})`;
+    }
+  }
+}
+
+// --- IPC Handlers ---
+
+// Multi-pet state change
+window.electronAPI.onPetStateChange((sessionId, state, svg) => {
+  cancelReaction();
+
+  // Ignore global state events - they're for single-pet mode when no sessions exist
+  if (sessionId === "__global__") {
+    // For global state, only create/update if there are no real sessions
+    // If we already have real session pets, ignore global state
+    const hasRealSessions = ringOrder.length > 0 && !ringOrder.includes("default");
+    if (hasRealSessions) {
+      return; // Ignore global state when we have real sessions
+    }
+
+    // Update foreground pet if exists, otherwise create default
+    if (foregroundSessionId && pets.has(foregroundSessionId)) {
+      updatePetSvg(foregroundSessionId, svg);
+    } else if (pets.size === 0) {
+      // No pets yet, create a default one for global state
+      createPet("default", svg);
+    }
+    return;
+  }
+
+  // Real session: if we have a "default" pet from global state, remove it
+  if (sessionId !== "default" && pets.has("default")) {
+    removePet("default");
+  }
+
+  // Create pet if needed
+  if (!pets.has(sessionId)) {
+    createPet(sessionId, svg);
+  }
+
+  const pet = pets.get(sessionId);
+  updatePetSvg(sessionId, svg);
+  pet.state = state;
+});
+
+// Layout update
+window.electronAPI.onLayoutUpdate((newRingOrder, positions) => {
+  updatePetPositions(newRingOrder, positions);
+});
+
+// Pet remove
+window.electronAPI.onPetRemove((sessionId) => {
+  removePet(sessionId);
+});
+
+// Eye movement
 window.electronAPI.onEyeMove((dx, dy) => {
   lastEyeDx = dx;
   lastEyeDy = dy;
-  // Detect stale eye targets (e.g. after DWM z-order recovery invalidates contentDocument)
-  if (eyeTarget && !eyeTarget.ownerDocument?.defaultView) {
-    eyeTarget = null;
-    bodyTarget = null;
-    shadowTarget = null;
-    if (clawdEl && clawdEl.isConnected) attachEyeTracking(clawdEl);
-    return;
+
+  if (foregroundSessionId) {
+    const targets = eyeTargets.get(foregroundSessionId);
+    if (targets && targets.eye && !targets.eye.ownerDocument?.defaultView) {
+      const pet = pets.get(foregroundSessionId);
+      if (pet) attachEyeTracking(foregroundSessionId, pet.element);
+    }
+    applyEyeMove(foregroundSessionId, dx, dy);
   }
-  applyEyeMove(dx, dy);
 });
 
-// --- Wake from doze (smooth eye opening) ---
+// Wake from doze
 window.electronAPI.onWakeFromDoze(() => {
-  if (clawdEl && clawdEl.contentDocument) {
+  const pet = pets.get(foregroundSessionId);
+  if (pet && pet.element && pet.element.contentDocument) {
     try {
-      const eyes = clawdEl.contentDocument.getElementById("eyes-doze");
+      const eyes = pet.element.contentDocument.getElementById("eyes-doze");
       if (eyes) eyes.style.transform = "scaleY(1)";
     } catch (e) {}
   }
 });
 
-// --- Right-click context menu ---
+// Right-click context menu
 document.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   window.electronAPI.showContextMenu();
