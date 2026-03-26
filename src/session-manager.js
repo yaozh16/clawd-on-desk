@@ -4,7 +4,6 @@
 const { Session } = require("./session");
 const { Layout } = require("./layout");
 const {
-  STATE_SVGS,
   STATE_PRIORITY,
   SLEEP_SEQUENCE,
   SVG_IDLE_FOLLOW,
@@ -137,26 +136,6 @@ class SessionManager {
 
   sendToRenderer(channel, ...args) {
     this.main.sendToRenderer(channel, ...args);
-  }
-
-  // ── SVG Helpers ──
-
-  getWorkingSvg() {
-    let n = 0;
-    for (const [, s] of this.sessions) {
-      if (s.state === "working" || s.state === "thinking" || s.state === "juggling") n++;
-    }
-    if (n >= 3) return "clawd-working-building.svg";
-    if (n >= 2) return "clawd-working-juggling.svg";
-    return "clawd-working-typing.svg";
-  }
-
-  getJugglingSvg() {
-    let n = 0;
-    for (const [, s] of this.sessions) {
-      if (s.state === "juggling") n++;
-    }
-    return n >= 2 ? "clawd-working-conducting.svg" : "clawd-working-juggling.svg";
   }
 
   // ── Global Sleep Sequence ──

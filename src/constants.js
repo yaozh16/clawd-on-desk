@@ -6,18 +6,18 @@ const SVG_IDLE_FOLLOW = "clawd-idle-follow.svg";
 const SVG_IDLE_LOOK = "clawd-idle-look.svg";
 const SVG_IDLE_LIVING = "clawd-idle-living.svg";
 
-// ── State → SVG mapping ──
+// ── State → SVG mapping (multiple SVGs = random selection) ──
 const STATE_SVGS = {
   idle: [SVG_IDLE_FOLLOW, SVG_IDLE_LIVING],
   yawning: ["clawd-idle-yawn.svg"],
   dozing: ["clawd-idle-doze.svg"],
   collapsing: ["clawd-collapse-sleep.svg"],
-  thinking: ["clawd-working-thinking.svg"],
-  working: ["clawd-working-typing.svg"],
-  juggling: ["clawd-working-juggling.svg"],
+  thinking: ["clawd-working-thinking.svg", "clawd-working-ultrathink.svg"],
+  working: ["clawd-working-typing.svg", "clawd-working-building.svg", "clawd-working-pushing.svg"],
+  juggling: ["clawd-working-juggling.svg", "clawd-working-conducting.svg"],
   sweeping: ["clawd-working-sweeping.svg"],
-  error: ["clawd-error.svg"],
-  attention: ["clawd-happy.svg"],
+  error: ["clawd-error.svg", "clawd-working-overheated.svg", "clawd-working-confused.svg"],
+  attention: ["clawd-happy.svg", "clawd-working-wizard.svg"],
   notification: ["clawd-notification.svg"],
   carrying: ["clawd-working-carrying.svg"],
   sleeping: ["clawd-sleeping.svg"],
@@ -45,6 +45,18 @@ const MIN_DISPLAY_MS = {
   thinking: 1000,
   "mini-alert": 4000,
   "mini-happy": 4000,
+};
+
+// ── State duration thresholds for SVG selection ──
+const STATE_DURATION_THRESHOLDS = {
+  thinking: 15000,   // 15s → force ultrathink
+  working: 30000,    // 30s → force building
+};
+
+// ── Consecutive error count thresholds ──
+const ERROR_COUNT_THRESHOLDS = {
+  overheated: 2,     // 2+ errors → overheated
+  confused: 3,       // 3+ errors → confused
 };
 
 // ── Oneshot states that auto-return to idle ──
@@ -111,6 +123,8 @@ module.exports = {
   SVG_IDLE_LIVING,
   STATE_SVGS,
   MIN_DISPLAY_MS,
+  STATE_DURATION_THRESHOLDS,
+  ERROR_COUNT_THRESHOLDS,
   AUTO_RETURN_MS,
   ONESHOT_STATES,
   STATE_PRIORITY,

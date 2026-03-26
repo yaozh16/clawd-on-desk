@@ -4,10 +4,11 @@
 const {
   STATE_SVGS,
   MIN_DISPLAY_MS,
+  STATE_DURATION_THRESHOLDS,
+  ERROR_COUNT_THRESHOLDS,
   AUTO_RETURN_MS,
   STATE_PRIORITY,
   SVG_IDLE_FOLLOW,
-  SVG_IDLE_LIVING,
   ONESHOT_STATES,
   SLEEP_SEQUENCE,
 } = require("./constants");
@@ -26,6 +27,9 @@ class Session {
     this.state = "idle";
     this.svg = SVG_IDLE_FOLLOW;
     this.stateChangedAt = Date.now();
+
+    // Error tracking for SVG selection
+    this.consecutiveErrors = 0;
 
     // Timers
     this.autoReturnTimer = null;
@@ -52,6 +56,13 @@ class Session {
 
     // Map event to state
     const newState = this.mapEventToState(event, payload);
+
+    // Track consecutive errors
+    if (newState === "error") {
+      this.consecutiveErrors++;
+    } else {
+      this.consecutiveErrors = 0;
+    }
 
     // Update metadata
     if (payload.sourcePid) this.sourcePid = payload.sourcePid;
@@ -136,12 +147,15 @@ class Session {
   }
 
   applyState(state, svgOverride) {
+    const previousState = this.state;
+    const previousChangedAt = this.stateChangedAt;
+
     this.state = state;
     this.stateChangedAt = Date.now();
     this.updatedAt = Date.now();
 
     const svgs = STATE_SVGS[state] || STATE_SVGS.idle;
-    this.svg = svgOverride || svgs[Math.floor(Math.random() * svgs.length)];
+    this.svg = svgOverride || this.selectSvg(state, svgs, previousState, previousChangedAt);
 
     // Notify renderer
     this.manager.sendToRenderer("pet-state-change", this.id, this.state, this.svg);
@@ -152,10 +166,43 @@ class Session {
     }
   }
 
+  selectSvg(state, svgs, previousState, previousChangedAt) {
+    // Error state: use consecutive error count to determine SVG
+    if (state === "error") {
+      if (this.consecutiveErrors >= ERROR_COUNT_THRESHOLDS.confused) {
+        // 3+ errors: confused or overheated
+        return Math.random() < 0.5 ? "clawd-working-confused.svg" : "clawd-working-overheated.svg";
+      }
+      if (this.consecutiveErrors >= ERROR_COUNT_THRESHOLDS.overheated) {
+        // 2 errors: higher chance of overheated
+        return Math.random() < 0.6 ? "clawd-working-overheated.svg" : "clawd-error.svg";
+      }
+      // 1 error: random from all error SVGs
+      return svgs[Math.floor(Math.random() * svgs.length)];
+    }
+
+    // Thinking state: check duration threshold (same state continuation)
+    if (state === "thinking" && previousState === "thinking") {
+      const elapsed = Date.now() - previousChangedAt;
+      if (elapsed >= STATE_DURATION_THRESHOLDS.thinking) {
+        return "clawd-working-ultrathink.svg";
+      }
+    }
+
+    // Working state: check duration threshold (same state continuation)
+    if (state === "working" && previousState === "working") {
+      const elapsed = Date.now() - previousChangedAt;
+      if (elapsed >= STATE_DURATION_THRESHOLDS.working) {
+        return "clawd-working-building.svg";
+      }
+    }
+
+    // Default: random selection
+    return svgs[Math.floor(Math.random() * svgs.length)];
+  }
+
   getSvgOverride(state) {
     if (state === "idle") return SVG_IDLE_FOLLOW;
-    if (state === "working") return this.manager.getWorkingSvg();
-    if (state === "juggling") return this.manager.getJugglingSvg();
     return null;
   }
 
