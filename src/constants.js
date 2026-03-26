@@ -101,7 +101,7 @@ const CONFIGURABLE_DEFAULTS = {
 // ── Ring layout config ──
 const RING_CONFIG = {
   maxPets: 5,
-  radius: 80,  // Base radius for positioning
+  radius: 100,  // Base radius for positioning (increased for better spacing)
   animationDuration: 300,
 };
 
