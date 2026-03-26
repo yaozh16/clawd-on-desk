@@ -18,9 +18,6 @@ class Gateway {
     this.manager = sessionManager;
     this.main = mainProcess;
     this.httpServer = null;
-
-    // Permission requests (kept in gateway for now)
-    this.pendingPermissions = [];
   }
 
   startHttpServer(port = 23333) {
@@ -106,13 +103,9 @@ class Gateway {
           return;
         }
 
-        // Handle "user answered in terminal"
+        // Handle "user answered in terminal" - deny any pending permissions for this session
         if (event === "PostToolUse" || event === "PostToolUseFailure" || event === "Stop") {
-          for (const perm of [...this.pendingPermissions]) {
-            if (perm.sessionId === sessionId) {
-              this.resolvePermission(perm, "deny", "User answered in terminal");
-            }
-          }
+          this.main.denyPermissionsForSession(sessionId);
         }
 
         // Direct SVG override
@@ -222,12 +215,12 @@ class Gateway {
         // Handle client disconnect
         const abortHandler = () => {
           if (res.writableFinished) return;
-          this.resolvePermission(permEntry, "deny", "Client disconnected");
+          this.main.resolvePermission(permEntry, "deny", "Client disconnected");
         };
         permEntry.abortHandler = abortHandler;
         res.on("close", abortHandler);
 
-        this.pendingPermissions.push(permEntry);
+        this.main.addPendingPermission(permEntry);
         this.main.showPermissionBubble(permEntry);
       } catch {
         res.writeHead(400);
@@ -236,65 +229,12 @@ class Gateway {
     });
   }
 
-  resolvePermission(permEntry, behavior, message) {
-    const idx = this.pendingPermissions.indexOf(permEntry);
-    if (idx === -1) return;
-    this.pendingPermissions.splice(idx, 1);
-
-    const { res, abortHandler, bubble } = permEntry;
-    if (abortHandler) res.removeListener("close", abortHandler);
-
-    // Hide bubble
-    if (bubble && !bubble.isDestroyed()) {
-      bubble.webContents.send("permission-hide");
-      if (permEntry.hideTimer) clearTimeout(permEntry.hideTimer);
-      permEntry.hideTimer = setTimeout(() => {
-        if (bubble && !bubble.isDestroyed()) bubble.destroy();
-      }, 250);
-    }
-
-    // Reposition remaining bubbles
-    this.main.repositionBubbles();
-
-    // Send response
-    if (res.writableEnded || res.destroyed) return;
-
-    const decision = { behavior: behavior === "deny" ? "deny" : "allow" };
-    if (behavior === "deny" && message) decision.message = message;
-    if (permEntry.resolvedSuggestion) {
-      decision.updatedPermissions = [permEntry.resolvedSuggestion];
-    }
-
-    this.sendPermissionResponse(res, decision);
-  }
-
-  sendPermissionResponse(res, decisionOrBehavior, message) {
-    let decision;
-    if (typeof decisionOrBehavior === "string") {
-      decision = { behavior: decisionOrBehavior };
-      if (message) decision.message = message;
-    } else {
-      decision = decisionOrBehavior;
-    }
-
-    const responseBody = JSON.stringify({
-      hookSpecificOutput: { hookEventName: "PermissionRequest", decision },
-    });
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(responseBody);
-  }
-
   // ── Cleanup ──
 
   stop() {
     if (this.httpServer) {
       this.httpServer.close();
       this.httpServer = null;
-    }
-
-    // Deny all pending permissions
-    for (const perm of [...this.pendingPermissions]) {
-      this.resolvePermission(perm, "deny", "Clawd is quitting");
     }
   }
 }

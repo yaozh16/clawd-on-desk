@@ -301,6 +301,19 @@ const mainInterface = {
   repositionBubbles: () => {
     repositionBubbles();
   },
+  addPendingPermission: (permEntry) => {
+    pendingPermissions.push(permEntry);
+  },
+  resolvePermission: (permEntry, behavior, message) => {
+    resolvePermissionEntry(permEntry, behavior, message);
+  },
+  denyPermissionsForSession: (sessionId) => {
+    for (const perm of [...pendingPermissions]) {
+      if (perm.sessionId === sessionId) {
+        resolvePermissionEntry(perm, "deny", "User answered in terminal");
+      }
+    }
+  },
 };
 
 // Helper to get display session ID (foreground or global)
